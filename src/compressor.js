@@ -1092,23 +1092,30 @@ function buildLoader(payloadText, seed, stats, opts) {
   const head =
     "return(function()" +
     "local a,b,c,d=(unpack or table.unpack),(_ENV or getgenv and getgenv() or getfenv and getfenv() or _G)," +
-    "(function(...)local l=(loadstring or load) if not l then error(\"loadstring unavailable: enable Roblox ServerScriptService.LoadStringEnabled or use an executor\",0) end return l(...) end)," +
+    "(function(...)local l=(loadstring or load) if not l then error(\"loadstring unavailable\",0) end return l(...) end)," +
     "(" + open + payloadText + close + ") " + engine + " " +
     "end)()";
   const pct = (1 - head.length / Math.max(1, stats.origBytes)) * 100;
   const entropyName = stats.entropy === 2 ? "range" : (stats.entropy === 1 ? "Huffman" : "stored");
   const pctTxt = (pct >= 0 ? Math.round(pct * 10) / 10 + "% smaller" : Math.round(-pct * 10) / 10 + "% larger");
   const header =
-    "--minified by ZipString (seed " + (seed >>> 0) + ") | " +
-    stats.origBytes + " B -> " + head.length + " B (" + pctTxt + ") | " + (stats.entropy === 0 ? "minify+stored" : "minify+LZ77+" + entropyName) + "+ASCII85";
+    "--minified by ZipString"
   return header + "\n" + head + "\n";
 }
 
 function compressToLoader(inputStr, opts) {
   if (typeof inputStr !== "string") throw new Error("input must be a string (got " + typeof inputStr + ")");
   opts = opts || {};
+  const cryptoObj = globalThis.crypto || window.crypto || window.msCrypto;
+  const array = new Uint32Array(8);
+  cryptoObj.getRandomValues(array);
+  let mixed = (Math.floor(performance.now() * 1000000) ^ Date.now() ^ Math.floor(Math.random() * 4294967296)) >>> 0;
+  for (let i = 0; i < array.length; i++) {
+    mixed = Math.imul(mixed ^ array[i], 2654435761) >>> 0;
+  }
+  const trueRandomUint32 = (mixed ^ (mixed >>> 16)) >>> 0;
   const seed = (opts.seed === undefined || opts.seed === null || opts.seed === "" || isNaN(+opts.seed))
-    ? Math.floor(Math.random() * 4294967296) : (+opts.seed >>> 0);
+    ? trueRandomUint32 : (+opts.seed >>> 0);
   const origBytes = new TextEncoder().encode(inputStr).length;
   let workStr = inputStr, minified = false;
   if (opts.minify !== false) {
@@ -1122,13 +1129,9 @@ function compressToLoader(inputStr, opts) {
   const alpha = shuffle(B85.split(""), rng).join("");
   const lzh = encodeLZH(bytes);
   const lzhContainer = [1].concat(le32(bytes.length), le32(H), lzh.bytes);
-  /* stacked entropy: also range-code the same token stream, keep the winner */
   const rcBytes = rcEncodeTokens(bytes, lzh.tokens);
   const rcContainer = [2].concat(le32(bytes.length), le32(H), rcBytes);
   const storedContainer = [0].concat(le32(bytes.length), le32(H), Array.from(bytes));
-  /* pick the format whose FULL LOADER (engine + payload) is smallest — each
-     format ships a different-size engine, so judging by container bytes alone
-     would lie about the only number that matters: what you actually paste */
   const forced = opts.entropy === "rc" || opts.entropy === "huffman" || opts.entropy === "stored" ? opts.entropy : "auto";
   const allowed = forced === "rc" ? [2, 0] : (forced === "huffman" ? [1, 0] : (forced === "stored" ? [0] : [2, 1, 0]));
   const containers = { 2: rcContainer, 1: lzhContainer, 0: storedContainer };
