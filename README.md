@@ -27,19 +27,6 @@ return(function(unpack,env,compressedcode)local a,b,c,d=...end)(unpack,env,compr
 The seed is picked at random on every compress (shown in the header so a loader can
 always be reproduced later with the Decompress tab or `ZIPSTR.compressToLoader(src, {seed})`).
 
-### Luau & Roblox support
-
-- **Verified against the official Luau CLI**: `continue`, compound assignments (`+=`, `..=`, …),
-  if-then-else expressions, `::` type casts, type annotations + generics, generalized iteration
-  and backtick string interpolation all minify to output that runs **identically** to the original.
-- **A real Luau bug, found and fixed (2026-11-18)**: the loader head used to `setfenv` the payload
-  to `_G` — but in sandboxed Luau (official CLI, some hosts) `_G` is *not* the script's environment
-  table, so the payload lost all its globals ("attempt to index nil"). The head now resolves the
-  real environment via `getgenv`/`getfenv()` and only falls back to `_G`. Old loaders made before
-  this fix should be regenerated if you run them in such environments.
-- **On plain Roblox** (no executor), `loadstring` only exists when
-  *ServerScriptService ▸ LoadStringEnabled* is on — the loader now says exactly that when it's missing.
-
 ## Reduced ratios
 
 What you get depends entirely on how repetitive the input is:
