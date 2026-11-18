@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZipString · Decompress / inspect</title>
+<meta name="description" content="Paste a ZipString loader and see exactly what it will run before you run it. 100% client-side.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗜️</text></svg>">
+<link rel="stylesheet" href="../src/style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1><span class="clip">🗜️</span> ZipString</h1>
+  <div class="tagline">Minify your code, <b>without worrying about whether the storage is almost full.</b></div>
+</header>
+
+<nav class="tabs">
+  <a href="../compressor/">🗜️ Compress</a>
+  <a class="active" href="./">🔍 Decompress / inspect</a>
+</nav>
+
+<section>
+
+<div class="card">
+  <h2>Paste a ZipString loader <span class="meta">see exactly what it will run before you run it</span></h2>
+  <textarea id="dIn" spellcheck="false" placeholder="--This file is minified by ZipString ...&#10;return(function(unpack,env,compressedcode)...&#10;-- paste the whole loader here"></textarea>
+  <div class="row">
+    <button class="btn primary" id="btnDecompress">🔍 Decompress</button>
+  </div>
+  <div class="errorbox" id="dErrBox"></div>
+</div>
+
+<div class="card" id="dOutCard" style="display:none">
+  <h2>Recovered source <span class="meta" id="dMeta"></span></h2>
+  <textarea id="dOut" readonly spellcheck="false"></textarea>
+  <div class="row">
+    <button class="btn primary" id="dCopy">📋 Copy</button>
+  </div>
+</div>
+
+</section>
+
+<!-- ============ ABOUT ============ -->
+<section>
+<div class="card">
+  <h2>About this page</h2>
+  <div class="safety" style="margin-top:0">⚠️ <b>Never run a loader you received from someone else without inspecting it here first.</b>
+  Paste the whole loader above and you'll see the exact source it would execute (in its <i>minified</i> form if the minifier was used — minification is lossy by design: comments, indentation and original local names are gone).
+  Loaders made before 2026-11-17 still decode — the old payload format is auto-detected and flagged.</div>
+  <details class="spec">
+    <summary>what the loader contains</summary>
+    <table>
+      <tr><td>payload</td><td>ASCII85 text in a long-bracket string — your source, minified then LZ77+Huffman compressed</td></tr>
+      <tr><td>engine</td><td>a tiny pure-Lua 5.1 decompressor (b85 → container → Huffman → LZ77) with a length + checksum guard, so a corrupted loader refuses to run instead of executing garbage</td></tr>
+      <tr><td>what runs</td><td>exactly what you see decoded above — nothing else, no network, no obfuscation</td></tr>
+    </table>
+  </details>
+</div>
+</section>
+
+<footer>
+  <b>ZipString</b> is a vibecoded tool that helps you minify your Lua code — everything runs locally in your browser, nothing you paste is ever uploaded.<br>
+  Plain static files, zero dependencies: this page plus <code>src/decompressor.js</code>, <code>src/compressor.js</code>, <code>src/app.js</code> and <code>src/style.css</code> — keep the folder structure and it works from disk or any static host.<br>
+  Released under the <a href="../LICENSE">MIT License</a>.
+</footer>
+
+</div>
+<div id="toast">copied</div>
+
+<script src="../src/decompressor.js"></script>
+<script src="../src/compressor.js"></script>
+<script src="../src/app.js"></script>
+</body>
+</html>
