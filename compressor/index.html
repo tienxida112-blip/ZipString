@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZipString · Compressor</title>
+<meta name="description" content="Compress your Lua Script">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗜️</text></svg>">
+<link rel="stylesheet" href="../src/style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1><span class="clip">🗜️</span> ZipString</h1>
+  <div class="tagline">Minify your code, <b>without worrying about whether the storage is almost full.</b></div>
+</header>
+
+<nav class="tabs">
+  <a class="active" href="./">Compressor</a>
+  <a href="../decompressor/">Decompressor</a>
+</nav>
+
+<section>
+
+<div class="card">
+  <h2>Input script <span class="meta" id="inCount">0 chars · 0 bytes (UTF-8)</span></h2>
+  <textarea id="input" spellcheck="false" placeholder="-- paste your Luau / Lua source here or import a code. if you see the imported code missing, that the anti crash function"></textarea>
+  <div class="row">
+    <button class="btn" id="btnImport">Upload</button>
+    <input type="file" id="fileInput" accept=".lua,.luau,.txt,text/plain" class="hidden">
+    <button class="btn" id="btnClear">Clear</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Options</h2>
+  <div class="row" style="margin-top:2px">
+    <label class="opt"><input type="checkbox" id="minify" checked> minify source first (comments, whitespace, numbers, call parens, rename variables&rarr; &hellip;)</label>
+    <span style="flex:1"></span>
+    <button class="btn primary" id="btnCompress">Start Compress</button>
+  </div>
+  <div class="errorbox" id="errBox"></div>
+</div>
+
+<div class="card" id="outCard" style="display:none">
+  <h2>Output<span class="meta" id="outCount"></span></h2>
+  <div class="stats" id="stats"></div>
+  <textarea id="output" readonly spellcheck="false"></textarea>
+  <div class="row">
+    <button class="btn primary" id="btnCopy">Copy</button>
+    <button class="btn" id="btnDownload">Download</button>
+    <span class="okline" id="okline"></span>
+  </div>
+</div>
+
+</section>
+
+<!-- ============ ABOUT ============ -->
+<section>
+<div class="card">
+  <h2>About the format</h2>
+  <details class="spec">
+    <summary>pipeline specification (minifier + ideas borrowed from tar + gzip/deflate + LZMA)</summary>
+    <table>
+      <tr><td>stage 0 — minifier</td><td>stacked passes on a token-preserving Lua/Luau lexer: ① strips comments and all unnecessary whitespace, ② shortens numbers (<code>0.1</code>→<code>.1</code>), ③ drops call parens (<code>f("x")</code>→<code>f'x'</code>), ④ renames locals/params/loop-vars to <code>a,b,c…</code> with full scope tracking (fields, globals, labels, Luau types and string-mentioned names are never touched). Keeps <code>--!</code> directives. Luau backtick/interpolated strings pass through verbatim — nothing inside them is rewritten. Lossy — comments and original names don't survive.</td></tr>
+      <tr><td>stage 1 — LZ77</td><td>hash-chain matcher with lazy evaluation, deep chain search and an <b>optimal parse</b> (dynamic programming over real Huffman bit costs, for inputs up to 2 MiB): window 2 MiB, match lengths 3…65542</td></tr>
+      <tr><td>stage 2 — rep-distances</td><td>LZMA-style distance reuse: a match at either of the two previous distances costs no distance bits at all</td></tr>
+      <tr><td>stage 3 — entropy</td><td>canonical Huffman per block — the encoder emits both 16 K and 64 K-token blockings and keeps whichever is smaller: 365-symbol literal/length/rep tree + 76-symbol distance tree, RLE-serialized code lengths, 15-bit limit</td></tr>
+      <tr><td>stage 4 — container</td><td>tar-style header [tag:1][length:4][hash:4] + bitstream; tag 0 = stored fallback for incompressible data</td></tr>
+      <tr><td>stage 5 — ASCII85</td><td>bytes → printable chars with a randomized 85-char alphabet (no <code>]</code>, so any long-bracket level is safe)</td></tr>
+      <tr><td>integrity</td><td>length + h = h·1000003 + byte (mod 2³²) checksum, verified before anything compiles</td></tr>
+      <tr><td>loader</td><td>pure Lua 5.1-compatible single line — runs on Luau (Roblox + executors), Lua 5.1–5.4, LuaJIT; needs <code>loadstring</code>/<code>load</code>; returns your script's return values. On plain Roblox, enable <i>ServerScriptService ▸ LoadStringEnabled</i> (or use an executor).</td></tr>
+    </table>
+  </details>
+  <div class="safety">⚠️ <b>ZipString compresses, it does not obfuscate</b> — the (minified) source is fully recoverable, and the randomization only varies what the output looks like. Never run a loader you received from someone else without inspecting it <a href="../decompressor/">here</a> first.</div>
+</div>
+</section>
+
+<footer>
+  <b>ZipString</b> is a vibecoded tool that helps you minify your Lua code — everything runs locally in your browser, nothing you paste is ever uploaded.<br>
+  Plain static files, zero dependencies: this page plus <code>src/decompressor.js</code>, <code>src/compressor.js</code>, <code>src/app.js</code> and <code>src/style.css</code> — keep the folder structure and it works from disk or any static host.<br>
+  Released under the <a href="../LICENSE">MIT License</a>.
+</footer>
+
+</div>
+<div id="toast">copied</div>
+
+<script src="../src/decompressor.js"></script>
+<script src="../src/compressor.js"></script>
+<script src="../src/app.js"></script>
+</body>
+</html>
