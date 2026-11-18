@@ -104,7 +104,6 @@
   const MAX_SHOW = 500000; /* textarea display cap */
   $("btnCompress").onclick = function () {
     hideErr("errBox");
-    $("okline").style.display = "none";
     try {
       const src2 = fullInput;
       if (!src2) throw new Error("paste or import a script first");
@@ -121,34 +120,20 @@
         $("outCount").textContent = fmt(r.loaderChars) + " chars · 1 line";
       }
       $("outCard").style.display = "block";
-      /* headline honesty: loader (what you paste) vs YOUR original input, chars vs chars */
+      /* output panel: % minified + the three sizes, nothing else */
       const origC = r.origChars || r.origBytes;
       const pct = Math.round((1 - r.loaderChars / Math.max(1, origC)) * 1000) / 10;
       const cls = pct >= 60 ? "good" : (pct >= 0 ? "mid" : "bad");
-      const stage = r.entropy === 3 ? "raw" : (r.entropy === 2 ? "LZ77+range" : (r.entropy === 1 ? "LZ77+Huffman" : "stored"));
+      const saved = origC - r.loaderChars;
       $("stats").innerHTML =
-        '<span class="chip">your input <b>' + fmt(origC) + ' chars</b> (' + fmt(r.origBytes) + ' B)</span>' +
-        (r.minified ? '<span class="chip">minify: <b>' + fmt(r.origBytes) + ' \u2192 ' + fmt(r.workBytes) + ' B</b> (\u2212' + Math.round((1 - r.workBytes / Math.max(1, r.origBytes)) * 100) + '% of input)</span>' : '') +
-        (r.entropy === 3
-          ? '<span class="chip">raw mode: <b>minified source ships as-is</b> — every engine + ASCII85 costs more than they save at this size</span>'
-          : '<span class="chip">' + stage + ': <b>' + fmt(r.workBytes) + ' \u2192 ' + fmt(r.payloadBytes) + ' B</b> (\u2212' + Math.round((1 - r.payloadBytes / Math.max(1, r.workBytes)) * 100) + '% of minified)</span>' +
-            '<span class="chip">ASCII85 payload: <b>' + fmt(r.payloadChars) + ' chars</b> + engine = <b>' + fmt(r.loaderChars) + ' chars</b> loader</span>') +
-        '<span class="huge ' + cls + '">' + (pct >= 0 ? pct + "% smaller" : (-pct) + "% larger") +
-        '<span class="math">real result \u00b7 loader vs your input: ' + fmt(origC) + ' \u2192 ' + fmt(r.loaderChars) + ' chars</span></span>' +
-        '<span class="chip">algo <b>' + r.algo + (r.usedDP ? " (optimal parse)" : "") + '</b></span>' +
-        '<span class="chip">tokens <b>' + fmt(r.tokens) + '</b> · blocks <b>' + r.blocks + '</b></span>' +
-        '<span class="chip">time <b>' + fmt(ms) + ' ms</b></span>';
+        '<div class="sv-big ' + cls + '">' + (pct >= 0 ? pct + "% minified" : (-pct) + "% bigger") + "</div>" +
+        '<div class="sv-line">Input: <b>' + fmt(origC) + "</b> chars</div>" +
+        '<div class="sv-line">Output: <b>' + fmt(r.loaderChars) + "</b> chars</div>" +
+        '<div class="sv-line">Total: <b>' + fmt(origC) + " - " + fmt(r.loaderChars) + " = " + fmt(Math.abs(saved)) +
+        "</b> chars " + (saved >= 0 ? "saved" : "bigger") + "</div>";
+      /* silent self-check: the output must still decode back exactly */
       const back = D.decompressLoader(r.loader);
       if (back.src !== r.workText) throw new Error("internal error: round-trip mismatch");
-      $("okline").style.display = "block";
-      $("okline").textContent = r.entropy === 3
-        ? "✓ raw mode: the output IS your code (minified) behind a 4-char marker — no engine needed at this size, nothing to decode"
-        : (r.minified
-          ? "✓ verified: decoding the full loader reproduces all " + fmt(r.workBytes) + " minified bytes exactly (comments, whitespace & local names were stripped)"
-          : "✓ verified: decoding the full loader reproduces all " + fmt(r.workBytes) + " bytes exactly");
-      if (pct < 0) toast(r.entropy === 3
-        ? "heads up: input is smaller than any self-extracting form — raw mode already shipped the smallest possible output"
-        : "heads up: loader is bigger than the input (fixed engine overhead)");
     } catch (e) { showErr("errBox", e); }
   };
 

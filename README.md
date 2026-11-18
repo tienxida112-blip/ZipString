@@ -15,17 +15,17 @@ your script ──► minify ──► LZ77 (lazy + optimal parse) ──► ran
 | **2b — Range coder** | LZMA / zstd | **Adaptive binary range coder** over the same LZ77 token stream: context-modeled bits (match/rep flags, 6-bit length tree, 7-bit distance tree, literal tree with last-byte + match-byte contexts, per-position extra bits), 11-bit adaptive probabilities. The encoder emits **both** the range-coded and the Huffman container and keeps whichever is smaller (with a stored fallback), so the format tag in the header (`0`/`1`/`2`) says which one shipped. Typically 10–16% smaller than Huffman on repetitive code. |
 | **3 — ASCII85** | tar.xz's a85 filter | 4 bytes → 5 printable chars, then a seed-shuffled alphabet so every load looks different and contains no `]` (safe inside the long-bracket payload). |
 | **Loader env** | Roblox + executors | detects the real environment at runtime: executors via `getgenv`, sandboxed Luau via `getfenv()`, Lua 5.1 via `_G` — the payload always sees the globals it's supposed to see. |
-| **Loader** | self-extractors | `return(function(unpack,env,compressedcode)…end)(unpack,env,compressedcode)`, then the engine's locals simply continue down the alphabet: `e, f, g, … z, aa, ab, …` (2-char and 3-char names kick in when the single-letter bank runs out; keywords are skipped). Pure Lua 5.1: works on Lua 5.1–5.4, LuaJIT, Luau and executors (`getgenv`/`getfenv` handled). |
+| **Loader** | self-extractors | `return(function()…end)()`, then the engine's locals simply continue down the alphabet: `e, f, g, … z, aa, ab, …` (2-char and 3-char names kick in when the single-letter bank runs out; keywords are skipped). Pure Lua 5.1: works on Lua 5.1–5.4, LuaJIT, Luau and executors (`getgenv`/`getfenv` handled). |
 
 The only comment in the output is the header:
 
 ```lua
---This file is minified by ZipString (https://tienxida112-blip.github.oi/ZipString)
-return(function(unpack,env,compressedcode)local a,b,c,d=...end)(unpack,env,compressedcode)
+--minified by ZipString [https://tienxida112.github.io/ZipString/]
+return(function()local a,b,c,d=...end)()
 ```
 
-The seed is picked at random on every compress (shown in the header so a loader can
-always be reproduced later with the Decompress tab or `ZIPSTR.compressToLoader(src, {seed})`).
+The seed is picked at random on every compress (mixed from crypto randomness) — the
+alphabet travels inside the loader itself, so the Decompressor page never needs it.
 
 ## License
 

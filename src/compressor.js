@@ -1099,7 +1099,7 @@ function buildLoader(payloadText, seed, stats, opts) {
   const entropyName = stats.entropy === 2 ? "range" : (stats.entropy === 1 ? "Huffman" : "stored");
   const pctTxt = (pct >= 0 ? Math.round(pct * 10) / 10 + "% smaller" : Math.round(-pct * 10) / 10 + "% larger");
   const header =
-    "--minified by ZipString \[https://tienxida112.github.oi/ZipString/\]"
+    "--minified by ZipString \[https://tienxida112.github.io/ZipString/\]"
   return header + "\n" + head + "\n";
 }
 
