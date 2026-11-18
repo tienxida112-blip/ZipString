@@ -337,9 +337,17 @@ function minifyLua(src) {
     if (c === '"' || c === "'") {
       let j = i + 1;
       while (j < n) {
-        if (src[j] === "\\") { j += 2; continue; }
+        if (src[j] === "\\") {
+          /* \z (Lua 5.2+/Luau) skips ALL following whitespace incl. newlines;
+             \<CR><LF> is one escape; content is copied verbatim either way —
+             only the string END detection matters here */
+          const e2 = src[j + 1];
+          if (e2 === "z") { j += 2; while (j < n && " \t\n\r\v\f".indexOf(src[j]) >= 0) j++; continue; }
+          if (e2 === "\r" && src[j + 2] === "\n") { j += 3; continue; }
+          j += 2; continue;
+        }
         if (src[j] === c) { j++; break; }
-        if (src[j] === "\n") break;
+        if (src[j] === "\n" || src[j] === "\r") break;
         j++;
       }
       pushTok(src.slice(i, j), "s");
@@ -355,7 +363,12 @@ function minifyLua(src) {
         let j = start + 1;
         while (j < n) {
           const d = src[j];
-          if (d === "\\") { j += 2; continue; }
+          if (d === "\\") {
+            const e2 = src[j + 1];
+            if (e2 === "z") { j += 2; while (j < n && " \t\n\r\v\f".indexOf(src[j]) >= 0) j++; continue; }
+            if (e2 === "\r" && src[j + 2] === "\n") { j += 3; continue; }
+            j += 2; continue;
+          }
           if (d === "`") return j + 1;
           if (d === "{") {
             let bd = 1, k = j + 1;
@@ -365,8 +378,16 @@ function minifyLua(src) {
               if (e === "'" || e === '"') {
                 const q = e;
                 k++;
-                while (k < n && src[k] !== q && src[k] !== "\n") { if (src[k] === "\\") k++; k++; }
-                if (k < n) k++;
+                while (k < n && src[k] !== q && src[k] !== "\n" && src[k] !== "\r") {
+                  if (src[k] === "\\") {
+                    const e3 = src[k + 1];
+                    if (e3 === "z") { k += 2; while (k < n && " \t\n\r\v\f".indexOf(src[k]) >= 0) k++; continue; }
+                    if (e3 === "\r" && src[k + 2] === "\n") { k += 3; continue; }
+                    k += 2; continue;
+                  }
+                  k++;
+                }
+                if (k < n && src[k] === q) k++;
                 continue;
               }
               if (e === "`") {
@@ -394,8 +415,11 @@ function minifyLua(src) {
       continue;
     }
     if (isDigit(c) || (c === "." && isDigit(src[i + 1]))) {
+      /* a +/- directly after e/E/p/P (with an alphanumeric after it) belongs to
+         the numeral (matches the real Lua lexer: 1e+5, 2e-3, 0x1p+4, 0xE-1) */
       let j = i;
-      while (j < n && (isAlnumU(src[j]) || src[j] === ".")) j++;
+      while (j < n && (isAlnumU(src[j]) || src[j] === "." ||
+        ((src[j] === "+" || src[j] === "-") && "eEpP".indexOf(src[j - 1]) >= 0 && j + 1 < n && isAlnumU(src[j + 1])))) j++;
       pushTok(src.slice(i, j), "n");
       i = j;
       continue;
@@ -985,53 +1009,55 @@ function makeNames() {
 }
 
 /* engine statements, @name tokens get substituted (@ never appears in Lua code) */
-function engineStatements(dumpMode) {
+function engineStatements(dumpMode, tag) {
   const S = [];
   S.push('local @A="@ALPHA"');
   S.push("local @e={} for @i=1,#@A do @e[@A:byte(@i)]=@i-1 end");
   S.push("local @f,@g={},0 local @i=1");
-  S.push("while @i<=#d do local @j=@i+4;local @k=5 if @j>#d then @j=#d;@k=#d-@i+1 end if @k<2 then error(\"corrupt stream: dangling character\",0) end local @vv=0 for @x=@i,@j do local @y=@e[d:byte(@x)] if not @y then error(\"corrupt stream: invalid character\",0) end @vv=@vv*85+@y end if @k<5 then @vv=@vv*85^(5-@k);local @m2=256^(5-@k);@vv=math.ceil(@vv/@m2)*@m2 end @g=@g+1 @f[@g]=string.char(math.floor(@vv/16777216),math.floor(@vv/65536)%256,math.floor(@vv/256)%256,@vv%256):sub(1,@k-1) @i=@i+5 end");
+  S.push("while @i<=#d do local @j=@i+4;local @k=5 if @j>#d then @j=#d;@k=#d-@i+1 end if @k<2 then error(\"corrupt: dangling char\",0) end local @vv=0 for @x=@i,@j do local @y=@e[d:byte(@x)] if not @y then error(\"corrupt: bad char\",0) end @vv=@vv*85+@y end if @k<5 then @vv=@vv*85^(5-@k);local @m2=256^(5-@k);@vv=math.ceil(@vv/@m2)*@m2 end @g=@g+1 @f[@g]=string.char(math.floor(@vv/16777216),math.floor(@vv/65536)%256,math.floor(@vv/256)%256,@vv%256):sub(1,@k-1) @i=@i+5 end");
   S.push("local @h=table.concat(@f)");
-  S.push("if #@h<9 then error(\"corrupt stream: truncated header\",0) end");
-  S.push("local @tag=@h:byte(1)");
+  S.push("if #@h<9 then error(\"corrupt: header\",0) end");
   S.push("local @l=@h:byte(2)+@h:byte(3)*256+@h:byte(4)*65536+@h:byte(5)*16777216");
   S.push("local @m=@h:byte(6)+@h:byte(7)*256+@h:byte(8)*65536+@h:byte(9)*16777216");
   S.push("local @src");
+  /* one engine per format: a loader only ever carries the decoder for the
+     format tag it actually ships — no dead branches riding along */
   const IF = [];
-  IF.push("if @tag==1 then");
+  if (tag === 1) {
   IF.push("local @q,@r,@s=10,0,0");
-  IF.push("local function @t() if @s==0 then @r=@h:byte(@q) if not @r then error(\"corrupt stream: truncated data\",0) end @q=@q+1;@s=8 end local @z=@r%2;@r=math.floor(@r/2);@s=@s-1 return @z end");
+  IF.push("local function @t() if @s==0 then @r=@h:byte(@q) if not @r then error(\"corrupt: data\",0) end @q=@q+1;@s=8 end local @z=@r%2;@r=math.floor(@r/2);@s=@s-1 return @z end");
   IF.push("local function @u(@n2) local @v2=0 for @j=1,@n2 do @v2=@v2+@t()*2^(@j-1) end return @v2 end");
   IF.push("local @LB,@LE={},{} local @bb=3 for @j=1,8 do @LB[@j]=@bb;@LE[@j]=0;@bb=@bb+1 end for @j=1,14 do for @k=0,1 do @LB[#@LB+1]=@bb;@LE[#@LE+1]=@j;@bb=@bb+2^@j end end");
   IF.push("local @DB,@DE={},{} @bb=1 for @j=1,4 do @DB[@j]=@bb;@DE[@j]=0;@bb=@bb+1 end for @j=1,18 do for @k=0,3 do @DB[#@DB+1]=@bb;@DE[#@DE+1]=@j;@bb=@bb+2^@j end end");
-  IF.push("local function @rl(@n2) local @lens,@ci={},0 while @ci<@n2 do local @L2=@u(4) if @L2>0 then @ci=@ci+1;@lens[@ci]=@L2 else local @rr=@u(6)+1 for @j=1,@rr do @ci=@ci+1;@lens[@ci]=0 end end if @ci>@n2 then error(\"corrupt stream: bad tree\",0) end end return @lens end");
+  IF.push("local function @rl(@n2) local @lens,@ci={},0 while @ci<@n2 do local @L2=@u(4) if @L2>0 then @ci=@ci+1;@lens[@ci]=@L2 else local @rr=@u(6)+1 for @j=1,@rr do @ci=@ci+1;@lens[@ci]=0 end end if @ci>@n2 then error(\"corrupt: tree\",0) end end return @lens end");
   IF.push("local function @v(@lens) local @cnt,@fst,@off,@cur,@symtab={},{},{},{},{} for @j=0,15 do @cnt[@j]=0 end for @j=1,#@lens do local @L2=@lens[@j] if @L2>0 then @cnt[@L2]=@cnt[@L2]+1 end end local @code=0 for @j=1,15 do @code=(@code+@cnt[@j-1])*2;@fst[@j]=@code end local @idx=1 for @j=1,15 do @off[@j]=@idx;@cur[@j]=@idx;@idx=@idx+@cnt[@j] end for @j=1,#@lens do local @L2=@lens[@j] if @L2>0 then @symtab[@cur[@L2]]=@j-1;@cur[@L2]=@cur[@L2]+1 end end return @cnt,@fst,@off,@symtab end");
-  IF.push("local function @w(@a1,@a2,@a3,@a4) local @code=0 for @j=1,15 do @code=@code*2+@t() local @cn=@a1[@j] if @cn>0 then local @dd=@code-@a2[@j] if @dd>=0 and @dd<@cn then return @a4[@a3[@j]+@dd] end end end error(\"corrupt stream: bad huffman code\",0) end");
+  IF.push("local function @w(@a1,@a2,@a3,@a4) local @code=0 for @j=1,15 do @code=@code*2+@t() local @cn=@a1[@j] if @cn>0 then local @dd=@code-@a2[@j] if @dd>=0 and @dd<@cn then return @a4[@a3[@j]+@dd] end end end error(\"corrupt: huff code\",0) end");
   IF.push("local @o,@p={},0 local @chr={} for @j=0,255 do @chr[@j]=string.char(@j) end local @ld,@ld2=0,0");
-  IF.push("while true do local @fin=@t() local @t1,@t2,@t3,@t4=@v(@rl(365)) local @y1,@y2,@y3,@y4=@v(@rl(76)) while true do local @z=@w(@t1,@t2,@t3,@t4) if @z==256 then break end if @z<256 then @p=@p+1;@o[@p]=@chr[@z] else local @li,@len,@ds,@dst if @z>328 then @li=@z-328;@len=@LB[@li]+@u(@LE[@li]);@dst=@ld2;@ld2=@ld;@ld=@dst elseif @z>292 then @li=@z-292;@len=@LB[@li]+@u(@LE[@li]);@dst=@ld else @li=@z-256;@len=@LB[@li]+@u(@LE[@li]);@ds=@w(@y1,@y2,@y3,@y4);@dst=@DB[@ds+1]+@u(@DE[@ds+1]);@ld2=@ld;@ld=@dst end if @dst<1 or @dst>@p then error(\"corrupt stream: distance too far\",0) end for @j=1,@len do @p=@p+1;@o[@p]=@o[@p-@dst] end end end if @fin==1 then break end end");
+  IF.push("while true do local @fin=@t() local @t1,@t2,@t3,@t4=@v(@rl(365)) local @y1,@y2,@y3,@y4=@v(@rl(76)) while true do local @z=@w(@t1,@t2,@t3,@t4) if @z==256 then break end if @z<256 then @p=@p+1;@o[@p]=@chr[@z] else local @li,@len,@ds,@dst if @z>328 then @li=@z-328;@len=@LB[@li]+@u(@LE[@li]);@dst=@ld2;@ld2=@ld;@ld=@dst elseif @z>292 then @li=@z-292;@len=@LB[@li]+@u(@LE[@li]);@dst=@ld else @li=@z-256;@len=@LB[@li]+@u(@LE[@li]);@ds=@w(@y1,@y2,@y3,@y4);@dst=@DB[@ds+1]+@u(@DE[@ds+1]);@ld2=@ld;@ld=@dst end if @dst<1 or @dst>@p then error(\"corrupt: distance\",0) end for @j=1,@len do @p=@p+1;@o[@p]=@o[@p-@dst] end end end if @fin==1 then break end end");
   IF.push("@src=table.concat(@o)");
+  } else if (tag === 2) {
   /* tag 2: LZ77 + adaptive range coder (LZMA-style) */
-  IF.push("elseif @tag==2 then");
-  IF.push("if #@h<14 then error(\"corrupt stream: truncated header\",0) end");
+  IF.push("if #@h<14 then error(\"corrupt: header\",0) end");
   IF.push("local @o,@p={},0 local @chr={} for @j=0,255 do @chr[@j]=string.char(@j) end local @ld,@ld2=0,0");
   IF.push("local @LB,@LE={},{} local @bb=3 for @j=1,8 do @LB[@j]=@bb;@LE[@j]=0;@bb=@bb+1 end for @j=1,14 do for @k=0,1 do @LB[#@LB+1]=@bb;@LE[#@LE+1]=@j;@bb=@bb+2^@j end end");
   IF.push("local @DB,@DE={},{} @bb=1 for @j=1,4 do @DB[@j]=@bb;@DE[@j]=0;@bb=@bb+1 end for @j=1,18 do for @k=0,3 do @DB[#@DB+1]=@bb;@DE[#@DE+1]=@j;@bb=@bb+2^@j end end");
   IF.push("local @Pp={} for @j=0,6375 do @Pp[@j]=1024 end");
   IF.push("local @sp,@rq,@pz=15,4294967295,0");
   IF.push("local @q2,@q3,@q4,@q5=@h:byte(11,14) local @rr=@q2*16777216+@q3*65536+@q4*256+@q5");
-  IF.push("local function @rb() local @z3=@h:byte(@sp) @sp=@sp+1 if not @z3 then @pz=@pz+1 if @pz>8 then error(\"corrupt stream: truncated\",0) end return 0 end return @z3 end");
+  IF.push("local function @rb() local @z3=@h:byte(@sp) @sp=@sp+1 if not @z3 then @pz=@pz+1 if @pz>8 then error(\"corrupt: truncated\",0) end return 0 end return @z3 end");
   IF.push("local function @db(@i3) local @pr=@Pp[@i3] local @bnd=math.floor(@rq/2048)*@pr local @z3 if @rr<@bnd then @rq=@bnd @Pp[@i3]=@pr+math.floor((2048-@pr)/32) @z3=0 else @rr=@rr-@bnd @rq=@rq-@bnd @Pp[@i3]=@pr-math.floor(@pr/32) @z3=1 end while @rq<16777216 do @rq=@rq*256 @rr=(@rr*256+@rb())%4294967296 end return @z3 end");
   IF.push("local function @dt(@of2,@nb2) local @s2=1 for @j=1,@nb2 do @s2=@s2*2+@db(@of2+@s2) end return @s2-2^@nb2 end");
   IF.push("local function @dx(@nb2,@of2) local @v3=0 for @j=@nb2-1,0,-1 do @v3=@v3*2+@db(@of2+@j) end return @v3 end");
   IF.push("local @am=false");
   IF.push("local function @dl() local @cb=0 if @p>0 then @cb=@o[@p]:byte() end local @bs=200+math.floor(@cb/32)*768 local @s2=1 if @am then local @mb=@o[@p-@ld+1]:byte() local @ok2=false while @s2<256 do local @mi=math.floor(@mb/128) @mb=(@mb*2)%256 local @z3=@db(@bs+(1+@mi)*256+@s2) @s2=@s2*2+@z3 if @mi~=@z3 then @ok2=true break end end if @ok2 then while @s2<256 do @s2=@s2*2+@db(@bs+@s2) end end return @s2-256 end while @s2<256 do @s2=@s2*2+@db(@bs+@s2) end return @s2-256 end");
-  IF.push("while @p<@l do if @db(0)==0 then local @v4=@dl() @p=@p+1 @o[@p]=@chr[@v4] @am=false else local @dst if @db(1)==1 then if @db(2)==0 then @dst=@ld else @dst=@ld2 @ld2=@ld @ld=@dst end local @lc=@dt(8,6) if @lc>35 then error(\"corrupt stream: bad length code\",0) end local @ln=@LB[@lc+1]+@dx(@LE[@lc+1],6344) if @dst<1 or @dst>@p then error(\"corrupt stream: distance too far\",0) end for @j=1,@ln do @p=@p+1 @o[@p]=@o[@p-@dst] end @am=true else local @lc=@dt(8,6) if @lc>35 then error(\"corrupt stream: bad length code\",0) end local @ln=@LB[@lc+1]+@dx(@LE[@lc+1],6344) local @dc=@dt(72,7) if @dc>75 then error(\"corrupt stream: bad distance code\",0) end @dst=@DB[@dc+1]+@dx(@DE[@dc+1],6358) if @dst<1 or @dst>@p then error(\"corrupt stream: distance too far\",0) end @ld2=@ld @ld=@dst for @j=1,@ln do @p=@p+1 @o[@p]=@o[@p-@dst] end @am=true end end end");
+  IF.push("while @p<@l do if @db(0)==0 then local @v4=@dl() @p=@p+1 @o[@p]=@chr[@v4] @am=false else local @dst if @db(1)==1 then if @db(2)==0 then @dst=@ld else @dst=@ld2 @ld2=@ld @ld=@dst end local @lc=@dt(8,6) if @lc>35 then error(\"corrupt: len code\",0) end local @ln=@LB[@lc+1]+@dx(@LE[@lc+1],6344) if @dst<1 or @dst>@p then error(\"corrupt: distance\",0) end for @j=1,@ln do @p=@p+1 @o[@p]=@o[@p-@dst] end @am=true else local @lc=@dt(8,6) if @lc>35 then error(\"corrupt: len code\",0) end local @ln=@LB[@lc+1]+@dx(@LE[@lc+1],6344) local @dc=@dt(72,7) if @dc>75 then error(\"corrupt: dist code\",0) end @dst=@DB[@dc+1]+@dx(@DE[@dc+1],6358) if @dst<1 or @dst>@p then error(\"corrupt: distance\",0) end @ld2=@ld @ld=@dst for @j=1,@ln do @p=@p+1 @o[@p]=@o[@p-@dst] end @am=true end end end");
   IF.push("@src=table.concat(@o)");
-  IF.push("elseif @tag==0 then @src=@h:sub(10)");
-  IF.push("else error(\"corrupt stream: unknown format tag\",0) end");
-  S.push(IF.join(" "));
-  S.push("if #@src~=@l then error(\"corrupt stream: length mismatch\",0) end");
-  S.push("local @hh=0 for @i=1,#@src do @hh=(@hh*1000003+@src:byte(@i))%4294967296 end if @hh~=@m then error(\"corrupt stream: checksum mismatch\",0) end");
+  } else {
+    IF.push("@src=@h:sub(10)");
+  }
+  for (const line of IF) S.push(line);
+  S.push("if #@src~=@l then error(\"corrupt: length\",0) end");
+  S.push("local @hh=0 for @i=1,#@src do @hh=(@hh*1000003+@src:byte(@i))%4294967296 end if @hh~=@m then error(\"corrupt: checksum\",0) end");
   if (dumpMode) {
     S.push("io.write(@src)");
   } else {
@@ -1052,9 +1078,9 @@ function buildLoader(payloadText, seed, stats, opts) {
   const level = 1 + Math.floor(rng() * 3);
   const open = "[" + "=".repeat(level) + "[";
   const close = "]" + "=".repeat(level) + "]";
-  const stmts = engineStatements(opts.mode === "dump");
+  const stmts = engineStatements(opts.mode === "dump", stats.entropy);
   const joiners = [];
-  for (let i = 0; i < stmts.length - 1; i++) joiners.push(rng() < 0.5 ? " " : "; ");
+  for (let i = 0; i < stmts.length - 1; i++) joiners.push(rng() < 0.5 ? " " : ";");
   let engine = "";
   for (let i = 0; i < stmts.length; i++) {
     if (i > 0) engine += joiners[i - 1];
@@ -1064,17 +1090,17 @@ function buildLoader(payloadText, seed, stats, opts) {
     });
   }
   const head =
-    "return(function(unpack,env,compressedcode)" +
+    "return(function()" +
     "local a,b,c,d=(unpack or table.unpack),(_ENV or getgenv and getgenv() or getfenv and getfenv() or _G)," +
-    "(function(...)local l=(loadstring or load) if not l then error(\"loadstring is not available here - on Roblox enable ServerScriptService.LoadStringEnabled, or use an executor\",0) end return l(...) end)," +
+    "(function(...)local l=(loadstring or load) if not l then error(\"loadstring unavailable: enable Roblox ServerScriptService.LoadStringEnabled or use an executor\",0) end return l(...) end)," +
     "(" + open + payloadText + close + ") " + engine + " " +
-    "end)(unpack,env,compressedcode)";
+    "end)()";
   const pct = (1 - head.length / Math.max(1, stats.origBytes)) * 100;
-  const entropyName = stats.entropy === 2 ? "range" : "Huffman";
+  const entropyName = stats.entropy === 2 ? "range" : (stats.entropy === 1 ? "Huffman" : "stored");
   const pctTxt = (pct >= 0 ? Math.round(pct * 10) / 10 + "% smaller" : Math.round(-pct * 10) / 10 + "% larger");
   const header =
-    "--This file is minified by ZipString (seed " + (seed >>> 0) + ") | " +
-    stats.origBytes + " B -> " + head.length + " B (" + pctTxt + ") | minify+LZ77+" + entropyName + "+ASCII85";
+    "--minified by ZipString (seed " + (seed >>> 0) + ") | " +
+    stats.origBytes + " B -> " + head.length + " B (" + pctTxt + ") | " + (stats.entropy === 0 ? "minify+stored" : "minify+LZ77+" + entropyName) + "+ASCII85";
   return header + "\n" + head + "\n";
 }
 
@@ -1100,14 +1126,19 @@ function compressToLoader(inputStr, opts) {
   const rcBytes = rcEncodeTokens(bytes, lzh.tokens);
   const rcContainer = [2].concat(le32(bytes.length), le32(H), rcBytes);
   const storedContainer = [0].concat(le32(bytes.length), le32(H), Array.from(bytes));
-  const entropy = opts.entropy === "rc" || opts.entropy === "huffman" ? opts.entropy : "auto";
-  let tag;
-  if (entropy === "rc") tag = rcContainer.length < storedContainer.length ? 2 : 0;
-  else if (entropy === "huffman") tag = lzhContainer.length < storedContainer.length ? 1 : 0;
-  else tag = rcContainer.length < Math.min(lzhContainer.length, storedContainer.length) ? 2
-    : (lzhContainer.length < storedContainer.length ? 1 : 0);
-  const container = tag === 2 ? rcContainer : (tag === 1 ? lzhContainer : storedContainer);
-  const text = b85encode(Uint8Array.from(container), alpha);
+  /* pick the format whose FULL LOADER (engine + payload) is smallest — each
+     format ships a different-size engine, so judging by container bytes alone
+     would lie about the only number that matters: what you actually paste */
+  const forced = opts.entropy === "rc" || opts.entropy === "huffman" || opts.entropy === "stored" ? opts.entropy : "auto";
+  const allowed = forced === "rc" ? [2, 0] : (forced === "huffman" ? [1, 0] : (forced === "stored" ? [0] : [2, 1, 0]));
+  const containers = { 2: rcContainer, 1: lzhContainer, 0: storedContainer };
+  let tag = allowed[0], container = containers[tag], text = "", bestLoader = "", best = Infinity;
+  for (const t of allowed) {
+    const t2 = b85encode(Uint8Array.from(containers[t]), alpha);
+    const st = { origBytes: origBytes, workBytes: bytes.length, payloadChars: t2.length, payloadBytes: containers[t].length, entropy: t };
+    const ld = buildLoader(t2, seed, st, { mode: opts.mode === "dump" ? "dump" : "run" });
+    if (ld.length < best) { best = ld.length; tag = t; container = containers[t]; text = t2; bestLoader = ld; }
+  }
   const back = decodeContainer(b85decode(text, alpha), alpha);
   if (back.tag !== tag || back.len !== bytes.length || back.hash !== H) {
     throw new Error("internal error: container verification failed");
@@ -1118,11 +1149,11 @@ function compressToLoader(inputStr, opts) {
   const stats = {
     origBytes: origBytes,
     workBytes: bytes.length,
-    payloadChars: text.length
+    payloadChars: text.length,
+    payloadBytes: container.length,
+    entropy: tag
   };
-  stats.payloadBytes = container.length;
-  stats.entropy = tag;
-  const loader = buildLoader(text, seed, stats, { mode: opts.mode === "dump" ? "dump" : "run" });
+  const loader = bestLoader;
   return {
     loader: loader,
     workText: workStr,

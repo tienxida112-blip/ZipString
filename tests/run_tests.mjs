@@ -36,9 +36,9 @@ function roundTrip(s, opts, name) {
   if (back.src !== r.workText) { ok(false, name + " (decompressLoader mismatch vs workText)"); return r; }
   const lines = r.loader.split("\n");
   if (lines.length !== 3 || lines[1].length === 0) { ok(false, name + " (not single-line)"); return r; }
-  if (!lines[0].startsWith("--This file is minified by ZipString")) { ok(false, name + " (header comment)"); return r; }
-  if (!lines[1].startsWith("return(function(unpack,env,compressedcode)")) { ok(false, name + " (skeleton head)"); return r; }
-  if (!lines[1].trimEnd().endsWith("end)(unpack,env,compressedcode)")) { ok(false, name + " (skeleton tail)"); return r; }
+  if (!lines[0].startsWith("--minified by ZipString")) { ok(false, name + " (header comment)"); return r; }
+  if (!lines[1].startsWith("return(function()")) { ok(false, name + " (skeleton head)"); return r; }
+  if (!lines[1].trimEnd().endsWith("end)()")) { ok(false, name + " (skeleton tail)"); return r; }
   if (!/^[\x20-\x7E\n\r\t]*$/.test(r.loader)) { ok(false, name + " (loader not pure ASCII)"); return r; }
   ok(true, name);
   return r;
@@ -239,11 +239,58 @@ const MIN_SOURCES = [
   }
 }
 
+/* ============ syntax battery: escapes, \z, exponent numbers ============ */
+{
+  console.log("\n== Syntax battery ==");
+  const EXACT = [
+    ["exp+", "print(1e+5)", "print(1e+5)"],
+    ["exp-", "print(2e-3)", "print(2e-3)"],
+    ["expE", "print(1E+10, 3e-7)", "print(1E+10,3e-7)"],
+    ["hexfloat", "print(0x1p+4, 0xA.8p2)", "print(0x1p+4,0xA.8p2)"],
+    ["z-escape", "local s = 'abc\\z\n   def' print(s)", "local s='abc\\z\n   def'print(s)"],
+    ["z-escape-tab", "local s = \"a\\z\\t\t b\" print(s)", "local s=\"a\\z\\t\t b\"print(s)"],
+    ["bs-newline", "local s = 'a\\\n b' print(s)", "local s='a\\\n b'print(s)"],
+    ["escapes", "local s = '\\x41\\66\\u{1F600}\\n\\t' return #s", "local s='\\x41\\66\\u{1F600}\\n\\t'return#s"],
+    ["longstr-z", "local s = [==[a\\z b]==] return s", "local s=[==[a\\z b]==]return s"],
+  ];
+  for (const [name, src, want] of EXACT) {
+    const got = Z.minifyLua(src);
+    ok(got === want, "exact minify " + name + ": " + JSON.stringify(got));
+  }
+  /* the killer case that produced 'Malformed string' in Luau: a \z whose
+     whitespace run contains a newline must NOT end the string token */
+  const zk = "local s='abc\\z\n   def' print(s, #s)";
+  const zm = Z.minifyLua(zk);
+  ok(zm.indexOf("'abc\\z\n   def'") >= 0, "\\z + newline stays inside the string token");
+  /* 1e+5 must stay one token (a space would make it a malformed number) */
+  ok(Z.minifyLua("print(1e+5, 1e - 5)") === "print(1e+5,1e-5)", "exponent signs stay glued to their numeral");
+  /* semantic equality under real Lua for the number/escape fixes (no \z: that is 5.2+) */
+  const SEM = [
+    "print(1e+5, 2e-3, 1E+10)",
+    "print(0.5e+2 + 1e+1)",
+    "print('a\\x41\\66' .. 'b')",
+    "local s='x\\'y' print(#s)",
+  ];
+  const luas0 = [];
+  for (const l of ["lua5.1", "lua5.4"]) { try { execFileSync(l, ["-v"], { stdio: "pipe" }); luas0.push(l); } catch (e) { /* skip */ } }
+  for (const lua of luas0) {
+    for (const src of SEM) {
+      const m = Z.minifyLua(src);
+      let a = "", b = "";
+      try { a = execFileSync(lua, ["-e", src], { encoding: "utf8" }); } catch (e) { a = "ERR:" + e.message.split("\n")[0]; }
+      try { b = execFileSync(lua, ["-e", m], { encoding: "utf8" }); } catch (e) { b = "ERR:" + e.message.split("\n")[0]; }
+      ok(a === b, lua + " escape/number semantic equality: " + src.slice(0, 40));
+    }
+  }
+}
+
 /* ============ deterministic short names ============ */
 console.log("== Names ==");
 {
-  const r1 = Z.compressToLoader("print(1) -- x", { seed: 4242 });
-  const r2 = Z.compressToLoader("print(1) -- x", { seed: 4242 });
+  /* big enough that the full Huffman engine actually ships (a tiny input
+     would honestly fall back to the smaller stored engine) */
+  const r1 = Z.compressToLoader(Z.SAMPLE.repeat(3), { seed: 4242, entropy: "huffman" });
+  const r2 = Z.compressToLoader(Z.SAMPLE.repeat(3), { seed: 4242, entropy: "huffman" });
   ok(r1.loader === r2.loader, "same seed -> identical loader");
   const r3 = Z.compressToLoader("print(1) -- x", { seed: 999 });
   ok(r1.loader !== r3.loader, "different seed -> different loader (alphabet)");
@@ -419,7 +466,7 @@ if (luas.length) {
     writeFileSync(f3, flipped, "utf8");
     let threw3 = false, msg3 = "";
     try { execFileSync(lua, [f3], { stdio: "pipe" }); } catch (e) { threw3 = true; msg3 = (e.stderr || "").toString(); }
-    ok(threw3 && /corrupt stream|checksum|length|invalid character|dangling|truncated|bad huffman|bad tree|distance too far|failed to compile/.test(msg3),
+    ok(threw3 && /corrupt|checksum|length|invalid|dangling|truncated|huff|tree|distance|failed to compile/.test(msg3),
       lua + " corrupted loader detected: " + msg3.split("\n")[0].slice(0, 90));
   }
 
@@ -626,7 +673,7 @@ if (luas.length) {
     ok(Z.decompressLoader(hu.loader).src === hu.workText, name + ": huffman loader JS round-trip");
     const auto = Z.compressToLoader(src, Object.assign({}, opts));
     ok(Z.decompressLoader(auto.loader).src === auto.workText, name + ": auto loader JS round-trip (tag " + auto.entropy + ")");
-    ok(auto.payloadBytes <= Math.min(rc.payloadBytes, hu.payloadBytes), name + ": auto keeps the smallest container");
+    ok(auto.loaderChars <= Math.min(rc.loaderChars, hu.loaderChars), name + ": auto keeps the smallest LOADER (engine included)");
     if (rc.entropy === 2 && hu.entropy === 1)
       console.log("    " + name + ": range " + rc.payloadBytes + " B vs huffman " + hu.payloadBytes + " B (" +
         (100 - Math.round(rc.payloadBytes / hu.payloadBytes * 100)) + "% smaller)");
@@ -689,6 +736,69 @@ if (luas.length) {
     const out30 = runF("local src=[====[\n" + r30.loader + "\n]====]\n(loadstring or load)(src)()");
     ok(out30 === "mods ok\n", "luau 30K rc run-mode output-exact");
     rmSync(LT2, { recursive: true, force: true });
+  }
+  rmSync(TMP, { recursive: true, force: true });
+}
+
+/* ============ specialized engines + small files ============ */
+{
+  console.log("\n== Specialized engines / small files ==");
+  /* every loader now carries ONLY its own format's decoder */
+  const eng = {};
+  for (const e of ["rc", "huffman", "stored"]) eng[e] = Z.compressToLoader("print(1)", { seed: 7, entropy: e });
+  ok(eng.stored.entropy === 0, "entropy 'stored' forces tag 0");
+  ok(eng.stored.loaderChars < 1700, "engine floor is small (stored loader " + eng.stored.loaderChars + " chars for an 8-char payload)");
+  const rS = Z.compressToLoader(Z.SAMPLE, { seed: 7 });
+  ok(rS.loaderChars < 3400, "2 KB sample loader stays under 3.4K chars (got " + rS.loaderChars + ")");
+  ok(Z.decompressLoader(rS.loader).src === rS.workText, "small-sample loader round-trips");
+  let breakEven = -1;
+  for (let n = 1; n <= 6 && breakEven < 0; n++) {
+    const r = Z.compressToLoader(Z.SAMPLE.repeat(n), { seed: 7 });
+    if (r.loaderChars <= r.origChars) breakEven = r.origChars;
+  }
+  ok(breakEven > 0, "break-even is reached within 6x sample (~" + breakEven + " chars in)");
+  const rBig = Z.compressToLoader(Z.SAMPLE.repeat(5), { seed: 7 });
+  ok(rBig.loaderChars < rBig.origChars, "5x sample (~10K chars) compresses honestly: " +
+    Math.round((1 - rBig.loaderChars / rBig.origChars) * 100) + "% smaller");
+
+  /* all three engines decode byte-exact in real Lua + run under Luau */
+  const mod = [];
+  for (let m = 0; m < 40; m++) {
+    mod.push("do local t" + m + "={}");
+    for (let k = 0; k < 8; k++) mod.push("t" + m + "[" + (k * 3 + m) + "]=" + (k + m) * (k + 1));
+    mod.push("end");
+  }
+  const modSrc = mod.join("\n") + '\nprint("engines ok")';
+  const luas3 = [];
+  for (const l of ["lua5.1", "lua5.4"]) { try { execFileSync(l, ["-v"], { stdio: "pipe" }); luas3.push(l); } catch (e) { /* skip */ } }
+  mkdirSync(TMP, { recursive: true });
+  for (const [label, eo] of [["tag0", "stored"], ["tag1", "huffman"], ["tag2", "rc"]]) {
+    const r = Z.compressToLoader(modSrc, { seed: 41, minify: false, entropy: eo, mode: "run" });
+    ok(r.entropy === (label === "tag0" ? 0 : label === "tag1" ? 1 : 2), label + " engine actually shipped");
+    ok(Z.decompressLoader(r.loader).src === r.workText, label + " loader JS round-trip");
+    for (const lua of luas3) {
+      const f = path.join(TMP, "eng_" + label + "_" + lua + ".lua");
+      writeFileSync(f, r.loader, "utf8");
+      let out = null;
+      try { out = execFileSync(lua, [f], { encoding: "utf8", maxBuffer: 1 << 26 }); }
+      catch (e) { ok(false, label + " " + lua + " run (lua error: " + (e.stderr ? e.stderr.toString().split("\n")[0] : e.message) + ")"); }
+      if (out !== null) ok(out === "engines ok\n", label + " engine output-exact under " + lua);
+    }
+  }
+  let luau3 = null;
+  for (const cand of [path.join(ROOT, ".tools", "luau"), "luau"]) {
+    try { execFileSync(cand, ["--help"], { stdio: "pipe" }); luau3 = cand; break; } catch (e) { /* keep looking */ }
+  }
+  if (luau3) {
+    for (const [label, eo] of [["tag0", "stored"], ["tag1", "huffman"], ["tag2", "rc"]]) {
+      const r = Z.compressToLoader(modSrc, { seed: 41, minify: false, entropy: eo, mode: "run" });
+      const f = path.join(TMP, "eng_" + label + "_luau.lua");
+      writeFileSync(f, "local src=[====[\n" + r.loader + "\n]====]\n(loadstring or load)(src)()", "utf8");
+      let out = null;
+      try { out = execFileSync(luau3, [f], { encoding: "utf8", maxBuffer: 1 << 26 }); }
+      catch (e) { ok(false, label + " luau run: " + (e.stderr ? e.stderr.toString().split("\n")[0] : e.message)); }
+      if (out !== null) ok(out === "engines ok\n", label + " engine output-exact under luau");
+    }
   }
   rmSync(TMP, { recursive: true, force: true });
 }

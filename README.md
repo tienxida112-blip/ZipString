@@ -41,12 +41,12 @@ your script ──► minify ──► LZ77 (lazy + optimal parse) ──► ran
 | **2b — Range coder** | LZMA / zstd | **Adaptive binary range coder** over the same LZ77 token stream: context-modeled bits (match/rep flags, 6-bit length tree, 7-bit distance tree, literal tree with last-byte + match-byte contexts, per-position extra bits), 11-bit adaptive probabilities. The encoder emits **both** the range-coded and the Huffman container and keeps whichever is smaller (with a stored fallback), so the format tag in the header (`0`/`1`/`2`) says which one shipped. Typically 10–16% smaller than Huffman on repetitive code. |
 | **3 — ASCII85** | tar.xz's a85 filter | 4 bytes → 5 printable chars, then a seed-shuffled alphabet so every load looks different and contains no `]` (safe inside the long-bracket payload). |
 | **Loader env** | Roblox + executors | detects the real environment at runtime: executors via `getgenv`, sandboxed Luau via `getfenv()`, Lua 5.1 via `_G` — the payload always sees the globals it's supposed to see. |
-| **Loader** | self-extractors | `return(function(unpack,env,compressedcode)…end)(unpack,env,compressedcode)` — a fixed skeleton (locals `a`/`b`/`c`/`d`), then the engine's locals simply continue down the alphabet: `e, f, g, … z, aa, ab, …` (2-char and 3-char names kick in when the single-letter bank runs out; keywords are skipped). Pure Lua 5.1: works on Lua 5.1–5.4, LuaJIT, Luau and executors (`getgenv`/`getfenv` handled). |
+| **Loader** | self-extractors | `return(function()…end)()` — a fixed skeleton (locals `a`/`b`/`c`/`d`), then the engine's locals simply continue down the alphabet: `e, f, g, … z, aa, ab, …` (2-char and 3-char names kick in when the single-letter bank runs out; keywords are skipped). **Each loader carries only the decoder for the format it ships** (stored ≈ 1.1 KB, Huffman ≈ 1.5 KB, range ≈ 1.6 KB) — no dead branches — and the compressor picks whichever full loader is smallest. Pure Lua 5.1: works on Lua 5.1–5.4, LuaJIT, Luau and executors (`getgenv`/`getfenv` handled). |
 
 The only comment in the output is the header:
 
 ```lua
---This file is minified by ZipString (seed 3986750786) | 19630 B -> 4102 B (79.1% smaller) | minify+LZ77+range+ASCII85
+--minified by ZipString (seed 3986750786) | 19630 B -> 3411 B (82.6% smaller) | minify+LZ77+range+ASCII85
 return(function(unpack,env,compressedcode)local a,b,c,d=...end)(unpack,env,compressedcode)
 ```
 
@@ -96,13 +96,14 @@ input you pasted, char for char (the UI computes it exactly this way):
 
 | Input | Size | Loader | Reduction |
 |---|---|---|---|
-| Dense module bundle (big project, minify −7%) | 12,706,117 B | 1,381,142 B | **89.1%** — minify, then LZ77+range −90% of the rest; range beat Huffman by ~11% |
-| Same bundle at 400 KB | 404,425 B | 49,028 B | **87.9%** — byte-exact in lua5.1, lua5.4 **and** the official Luau CLI |
-| Realistic script ×256 (**500 KB**) | 502,528 B | 7,429 chars | **98.5%** |
-| Same script ×512 (repetitive) | 1,005,056 B | 7,454 chars | **99.3%** |
-| `ab` repeated 1 MiB | 1,048,576 B | 6,306 chars | **99.4%** |
-| Realistic 2 KB script (full loader) | 1,963 chars | 7,108 chars | −262% (bigger — see below) |
-| Pure random ASCII, 10 MB | 10,000,000 chars | 10,341,109 chars | 3.4% bigger (entropy floor, see below) |
+| Dense module bundle (big project, minify −7%) | 12,706,117 B | 1,378,733 B | **89.1%** — minify, then LZ77+range −90% of the rest |
+| Same bundle at 400 KB | 404,425 B | 46,619 B | **88.5%** — byte-exact in lua5.1, lua5.4 **and** the official Luau CLI |
+| Realistic script ×256 (**500 KB**) | 502,528 B | 4,410 chars | **99.1%** |
+| Same script ×512 (repetitive) | 1,005,056 B | 4,427 chars | **99.6%** |
+| `ab` repeated 1 MiB | 1,048,576 B | 3,570 chars | **99.7%** |
+| Realistic script ×3 (**5.9 KB**) | 5,889 chars | 4,381 chars | **25.6% smaller** — small files genuinely compress now |
+| Realistic 2 KB script (full loader) | 1,963 chars | 3,173 chars | −62% (bigger — see below) |
+| Pure random ASCII, 10 MB | 10,000,000 chars | ~10,341,109 chars | ~3% bigger (entropy floor, see below) |
 
 The big number on the compressor page is always **loader vs. your original input**
 (chars vs. chars) — stage chips are labeled with what they're measured against
@@ -110,9 +111,11 @@ The big number on the compressor page is always **loader vs. your original input
 
 Two honest caveats:
 
-- **The loader has a fixed ~3.6 KB engine.** Scripts below ~4–5 KB can come out *larger* than
-  the input — the header and the UI will tell you so truthfully. Paste a bigger script
-  (e.g. the same module pasted several times) and the ratio climbs fast.
+- **The loader carries a small fixed engine** (stored ≈ 1.1 KB, Huffman ≈ 1.5 KB,
+  range ≈ 1.6 KB — each loader only embeds its own format's decoder). Scripts below
+  **~4.3 KB** can still come out *larger* than the input — the header and the UI will
+  tell you so truthfully. Past that break-even the ratio climbs fast (5.9 KB → −26%,
+  500 KB → −99%).
 - **Minification is lossy**: comments, indentation, blank lines and original local
   names are gone for good (that's the point). Turn it off if you need the exact bytes back.
 
@@ -133,7 +136,7 @@ is a completely different story — see the table above.
 > its own engine, old loaders keep running everywhere, and the Decompress tab
 > auto-detects the old format. Nothing *must* be regenerated for correctness.)
 
-`tests/run_tests.mjs` (Node ≥ 18) runs **644 checks**, all passing:
+`tests/run_tests.mjs` (Node ≥ 18) runs **684 checks**, all passing:
 
 - **Minifier battery** — semantic equality of minified vs. original output under **real
   Lua 5.1 and 5.4** for the whole stacked pipeline: local renaming (closures, upvalues,
@@ -146,6 +149,17 @@ is a completely different story — see the table above.
   injected comments), `luac5.1 -p` parse checks, Luau backtick bail.
 - **Name battery** — same seed → identical loader; engine locals are always the
   deterministic `a, b, c, d, e, f, …` bank (never keywords or globals like `io`/`os`).
+- **Syntax battery** — the exact string/number escapes real code uses:
+  `\z` (incl. a newline inside the whitespace run — the case that used to end the
+  string token early and produce Luau's "Malformed string"), `\xNN`, `\ddd`,
+  `\u{…}`, `\`+newline, exponent signs glued to their numeral (`1e+5`, `2e-3`,
+  `0x1p+4`, `0xA.8p2` — a space there would be a *malformed number*), long strings
+  containing `\z`; semantic equality of minified output under real Lua 5.1 + 5.4.
+- **Specialized engines / small files** — every format ships its own decoder (no dead
+  branches), the compressor picks the smallest **full loader** (engine included, not
+  just the container), the engine floor stays under 1.7 K chars, and all three
+  engines decode output-exact under lua5.1, lua5.4 **and** the Luau CLI; break-even
+  (loader ≤ input) is reached within ~6× the 2 KB sample.
 - **JS fuzz** — byte-exact round-trips from 1 byte to 600 KB across many alphabets,
   unicode/CRLF/NUL payloads, 30 seeds, determinism.
 - **Real Lua** — byte-exact `dump`-mode decompression under lua5.1 **and** lua5.4
