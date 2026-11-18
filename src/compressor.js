@@ -1099,21 +1099,29 @@ function buildLoader(payloadText, seed, stats, opts) {
   const entropyName = stats.entropy === 2 ? "range" : (stats.entropy === 1 ? "Huffman" : "stored");
   const pctTxt = (pct >= 0 ? Math.round(pct * 10) / 10 + "% smaller" : Math.round(-pct * 10) / 10 + "% larger");
   const header =
-    "--minified by ZipString"
+    "--minified by ZipString [https://tienxida112.github.oi/ZipString/]"
   return header + "\n" + head + "\n";
 }
 
 function compressToLoader(inputStr, opts) {
   if (typeof inputStr !== "string") throw new Error("input must be a string (got " + typeof inputStr + ")");
   opts = opts || {};
-  const cryptoObj = globalThis.crypto || window.crypto || window.msCrypto;
-  const array = new Uint32Array(8);
-  cryptoObj.getRandomValues(array);
-  let mixed = (Math.floor(performance.now() * 1000000) ^ Date.now() ^ Math.floor(Math.random() * 4294967296)) >>> 0;
-  for (let i = 0; i < array.length; i++) {
-    mixed = Math.imul(mixed ^ array[i], 2654435761) >>> 0;
-  }
-  const trueRandomUint32 = (mixed ^ (mixed >>> 16)) >>> 0;
+  /* true-random seed: crypto u32s x performance.now x Date.now x Math.random,
+     golden-ratio mixed (reworked by the boss) */
+  let trueRandomUint32 = Math.floor(Math.random() * 4294967296) >>> 0;
+  try {
+    const cryptoObj = globalThis.crypto ||
+      (typeof window !== "undefined" && (window.crypto || window.msCrypto)) || null;
+    if (cryptoObj && cryptoObj.getRandomValues) {
+      const array = new Uint32Array(8);
+      cryptoObj.getRandomValues(array);
+      let mixed = (Math.floor(performance.now() * 1000000) ^ Date.now() ^ trueRandomUint32) >>> 0;
+      for (let i = 0; i < array.length; i++) {
+        mixed = Math.imul(mixed ^ array[i], 2654435761) >>> 0;
+      }
+      trueRandomUint32 = (mixed ^ (mixed >>> 16)) >>> 0;
+    }
+  } catch (e) { /* stay with the Math.random mix */ }
   const seed = (opts.seed === undefined || opts.seed === null || opts.seed === "" || isNaN(+opts.seed))
     ? trueRandomUint32 : (+opts.seed >>> 0);
   const origBytes = new TextEncoder().encode(inputStr).length;
@@ -1142,18 +1150,31 @@ function compressToLoader(inputStr, opts) {
     const ld = buildLoader(t2, seed, st, { mode: opts.mode === "dump" ? "dump" : "run" });
     if (ld.length < best) { best = ld.length; tag = t; container = containers[t]; text = t2; bestLoader = ld; }
   }
-  const back = decodeContainer(b85decode(text, alpha), alpha);
-  if (back.tag !== tag || back.len !== bytes.length || back.hash !== H) {
-    throw new Error("internal error: container verification failed");
+  /* raw mode (auto only): when even the smallest engine costs more than it saves
+     (tiny or incompressible input), the smallest honest "loader" is the minified
+     source itself behind a 4-char marker — no tables, no engine, no ASCII85.
+     Sources with a shebang can't ship raw (the marker takes line 1). */
+  let isRaw = false;
+  if (opts.mode !== "dump" && forced === "auto" && workStr[0] !== "#") {
+    const rawL = "--Z\n" + workStr;
+    if (rawL.length < best) { best = rawL.length; bestLoader = rawL; isRaw = true; tag = 3; container = null; text = ""; }
   }
-  for (let i = 0; i < bytes.length; i++) {
-    if (back.src[i] !== bytes[i]) throw new Error("internal error: payload verification failed");
+  if (isRaw) {
+    if (bestLoader.slice(4) !== workStr) throw new Error("internal error: raw loader verification failed");
+  } else {
+    const back = decodeContainer(b85decode(text, alpha), alpha);
+    if (back.tag !== tag || back.len !== bytes.length || back.hash !== H) {
+      throw new Error("internal error: container verification failed");
+    }
+    for (let i = 0; i < bytes.length; i++) {
+      if (back.src[i] !== bytes[i]) throw new Error("internal error: payload verification failed");
+    }
   }
   const stats = {
     origBytes: origBytes,
     workBytes: bytes.length,
-    payloadChars: text.length,
-    payloadBytes: container.length,
+    payloadChars: isRaw ? workStr.length : text.length,
+    payloadBytes: isRaw ? bytes.length : container.length,
     entropy: tag
   };
   const loader = bestLoader;
@@ -1165,15 +1186,15 @@ function compressToLoader(inputStr, opts) {
     origBytes: origBytes,
     origChars: inputStr.length,
     workBytes: bytes.length,
-    payloadBytes: container.length,
-    payloadChars: text.length,
+    payloadBytes: isRaw ? bytes.length : container.length,
+    payloadChars: isRaw ? workStr.length : text.length,
     loaderChars: loader.length,
     tokens: countTokens(lzh.tokens),
-    blocks: tag === 2 ? 1 : lzh.blocks,
+    blocks: isRaw ? 1 : (tag === 2 ? 1 : lzh.blocks),
     usedDP: lzh.usedDP,
     seed: seed,
     entropy: tag,
-    algo: tag === 2 ? "LZ77+range" : (tag === 1 ? "LZ77+Huffman" : "stored")
+    algo: isRaw ? "raw" : (tag === 2 ? "LZ77+range" : (tag === 1 ? "LZ77+Huffman" : "stored"))
   };
 }
 function countTokens(tokens) {

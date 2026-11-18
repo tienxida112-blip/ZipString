@@ -101,7 +101,7 @@
   });
 
   let fullLoader = ""; /* the complete loader — display may be cut, this never is */
-  const MAX_SHOW = 200000; /* textarea display cap */
+  const MAX_SHOW = 500000; /* textarea display cap */
   $("btnCompress").onclick = function () {
     hideErr("errBox");
     $("okline").style.display = "none";
@@ -125,12 +125,14 @@
       const origC = r.origChars || r.origBytes;
       const pct = Math.round((1 - r.loaderChars / Math.max(1, origC)) * 1000) / 10;
       const cls = pct >= 60 ? "good" : (pct >= 0 ? "mid" : "bad");
-      const stage = r.entropy === 2 ? "LZ77+range" : (r.entropy === 1 ? "LZ77+Huffman" : "stored");
+      const stage = r.entropy === 3 ? "raw" : (r.entropy === 2 ? "LZ77+range" : (r.entropy === 1 ? "LZ77+Huffman" : "stored"));
       $("stats").innerHTML =
         '<span class="chip">your input <b>' + fmt(origC) + ' chars</b> (' + fmt(r.origBytes) + ' B)</span>' +
         (r.minified ? '<span class="chip">minify: <b>' + fmt(r.origBytes) + ' \u2192 ' + fmt(r.workBytes) + ' B</b> (\u2212' + Math.round((1 - r.workBytes / Math.max(1, r.origBytes)) * 100) + '% of input)</span>' : '') +
-        '<span class="chip">' + stage + ': <b>' + fmt(r.workBytes) + ' \u2192 ' + fmt(r.payloadBytes) + ' B</b> (\u2212' + Math.round((1 - r.payloadBytes / Math.max(1, r.workBytes)) * 100) + '% of minified)</span>' +
-        '<span class="chip">ASCII85 payload: <b>' + fmt(r.payloadChars) + ' chars</b> + engine = <b>' + fmt(r.loaderChars) + ' chars</b> loader</span>' +
+        (r.entropy === 3
+          ? '<span class="chip">raw mode: <b>minified source ships as-is</b> — every engine + ASCII85 costs more than they save at this size</span>'
+          : '<span class="chip">' + stage + ': <b>' + fmt(r.workBytes) + ' \u2192 ' + fmt(r.payloadBytes) + ' B</b> (\u2212' + Math.round((1 - r.payloadBytes / Math.max(1, r.workBytes)) * 100) + '% of minified)</span>' +
+            '<span class="chip">ASCII85 payload: <b>' + fmt(r.payloadChars) + ' chars</b> + engine = <b>' + fmt(r.loaderChars) + ' chars</b> loader</span>') +
         '<span class="huge ' + cls + '">' + (pct >= 0 ? pct + "% smaller" : (-pct) + "% larger") +
         '<span class="math">real result \u00b7 loader vs your input: ' + fmt(origC) + ' \u2192 ' + fmt(r.loaderChars) + ' chars</span></span>' +
         '<span class="chip">algo <b>' + r.algo + (r.usedDP ? " (optimal parse)" : "") + '</b></span>' +
@@ -139,10 +141,14 @@
       const back = D.decompressLoader(r.loader);
       if (back.src !== r.workText) throw new Error("internal error: round-trip mismatch");
       $("okline").style.display = "block";
-      $("okline").textContent = r.minified
-        ? "✓ verified: decoding the full loader reproduces all " + fmt(r.workBytes) + " minified bytes exactly (comments, whitespace & local names were stripped)"
-        : "✓ verified: decoding the full loader reproduces all " + fmt(r.workBytes) + " bytes exactly";
-      if (pct < 0) toast("heads up: loader is bigger than the input (fixed engine overhead)");
+      $("okline").textContent = r.entropy === 3
+        ? "✓ raw mode: the output IS your code (minified) behind a 4-char marker — no engine needed at this size, nothing to decode"
+        : (r.minified
+          ? "✓ verified: decoding the full loader reproduces all " + fmt(r.workBytes) + " minified bytes exactly (comments, whitespace & local names were stripped)"
+          : "✓ verified: decoding the full loader reproduces all " + fmt(r.workBytes) + " bytes exactly");
+      if (pct < 0) toast(r.entropy === 3
+        ? "heads up: input is smaller than any self-extracting form — raw mode already shipped the smallest possible output"
+        : "heads up: loader is bigger than the input (fixed engine overhead)");
     } catch (e) { showErr("errBox", e); }
   };
 
@@ -166,18 +172,90 @@
 
   /* ================= decompressor page ================= */
   if ($("btnDecompress")) {
-  $("dCopy").onclick = function () { if ($("dOut").value) copyText($("dOut").value, "source copied"); };
+  const MAX_SHOW_D = 500000; /* both boxes show at most this many chars */
+  let fullDIn = "";           /* the FULL loader text, never display-cut */
+  let dInShown = false;       /* true while the input box shows only a prefix */
+  let fullDOut = "";          /* the FULL recovered source, never display-cut */
+  function countDIn() {
+    const v = dInShown ? fullDIn : $("dIn").value;
+    const bytes = new TextEncoder().encode(v).length;
+    let txt = fmt(v.length) + " chars · " + fmt(bytes) + " bytes (UTF-8)";
+    if (dInShown) txt += " · box shows first " + fmt(MAX_SHOW_D) + " — full loader stored";
+    $("dInCount").textContent = txt;
+  }
+  $("dIn").addEventListener("input", function () {
+    const v = $("dIn").value;
+    if (!dInShown && v.length > MAX_SHOW_D) {
+      fullDIn = v;
+      dInShown = true;
+      $("dIn").value = v.slice(0, MAX_SHOW_D);
+      toast("⚠ " + fmt(v.length) + " chars — box shows first " + fmt(MAX_SHOW_D) + ", full loader stored");
+    } else if (dInShown) {
+      dInShown = false;
+      fullDIn = v;
+      toast("editing the shown text — the stored loader was replaced");
+    } else fullDIn = v;
+    countDIn();
+  });
+  $("btnDClear").onclick = function () { $("dIn").value = ""; fullDIn = ""; dInShown = false; countDIn(); $("dIn").focus(); };
+  $("btnDImport").onclick = function () { $("dFileInput").click(); };
+  $("dFileInput").addEventListener("change", function () {
+    const f = this.files && this.files[0];
+    if (!f) return;
+    const fr = new FileReader();
+    fr.onload = function () {
+      fullDIn = String(fr.result);
+      if (fullDIn.length > MAX_SHOW_D) {
+        dInShown = true;
+        $("dIn").value = fullDIn.slice(0, MAX_SHOW_D);
+        toast("imported " + f.name + " (" + fmt(fullDIn.length) + " chars — box shows first " + fmt(MAX_SHOW_D) + ", full loader stored)");
+      } else {
+        dInShown = false;
+        $("dIn").value = fullDIn;
+        toast("imported " + f.name + " (" + fmt(fullDIn.length) + " chars)");
+      }
+      countDIn();
+    };
+    fr.onerror = function () { toast("could not read that file"); };
+    fr.readAsText(f);
+    this.value = "";
+  });
+  $("dCopy").onclick = function () { if (fullDOut) copyText(fullDOut, "full source copied"); };
+  $("dDownload").onclick = function () {
+    if (!fullDOut) return;
+    try {
+      const blob = new Blob([fullDOut], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "recovered.lua";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+      toast("downloaded recovered.lua");
+    } catch (e) { toast("download blocked in this preview — use Copy instead"); }
+  };
   $("btnDecompress").onclick = function () {
     hideErr("dErrBox");
     $("dOutCard").style.display = "none";
     try {
+      const loaderText = dInShown ? fullDIn : ($("dIn").value || fullDIn);
+      if (!loaderText) throw new Error("paste or import a loader first");
       const t0 = performance.now();
-      const r = D.decompressLoader($("dIn").value);
-      $("dOut").value = r.src;
+      const r = D.decompressLoader(loaderText);
+      fullDOut = r.src;
+      if (r.src.length > MAX_SHOW_D) {
+        $("dOut").value = r.src.slice(0, MAX_SHOW_D) + "\n-- Output cutted cuz it too big, dont worry, the whole code still stored";
+        toast("⚠ " + fmt(r.src.length) + " chars — box shows first " + fmt(MAX_SHOW_D) + ", full source stored (copy/download = full)");
+      } else {
+        $("dOut").value = r.src;
+      }
       $("dOutCard").style.display = "block";
-      $("dMeta").textContent = fmt(r.len) + " bytes · " + (r.tag === 1 ? "LZ77+Huffman" : "stored") +
-        " · decoded in " + Math.max(1, Math.round(performance.now() - t0)) + " ms · checksum ✓ (source is the minified form if minify was on)" + (r.legacy ? " · legacy pre-v8 loader" : "");
+      const fmtName = r.tag === 3 ? "raw (source as-is)" : (r.tag === 2 ? "LZ77+range" : (r.tag === 1 ? "LZ77+Huffman" : "stored"));
+      const checkTxt = r.tag === 3 ? "no container — output is the minified source itself" : "checksum ✓ (source is the minified form if minify was on)";
+      $("dMeta").textContent = fmt(r.len) + " bytes · " + fmtName +
+        " · decoded in " + Math.max(1, Math.round(performance.now() - t0)) + " ms · " + checkTxt + (r.legacy ? " · legacy pre-v8 loader" : "");
     } catch (e) { showErr("dErrBox", e); }
   };
+  countDIn();
   }
 })();

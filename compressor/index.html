@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ZipString · Compress</title>
-<meta name="description" content="Minify and zip-grade compress Luau/Lua scripts into one single-line self-extracting loadstring. 100% client-side.">
+<title>ZipString · Compressor</title>
+<meta name="description" content="Compress your Lua Script">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗜️</text></svg>">
 <link rel="stylesheet" href="../src/style.css">
 </head>
@@ -17,17 +17,17 @@
 </header>
 
 <nav class="tabs">
-  <a class="active" href="./">🗜️ Compress</a>
-  <a href="../decompressor/">🔍 Decompress / inspect</a>
+  <a class="active" href="./">Compressor</a>
+  <a href="../decompressor/">Decompressor</a>
 </nav>
 
 <section>
 
 <div class="card">
   <h2>Input script <span class="meta" id="inCount">0 chars · 0 bytes (UTF-8)</span></h2>
-  <textarea id="input" spellcheck="false" placeholder="-- paste your Luau / Lua source here or import a file&#10;-- (scripts, ModuleScripts, obfuscated loadstrings, anything text-based)&#10;-- huge files: the box shows the first 500,000 chars, the full original is kept"></textarea>
+  <textarea id="input" spellcheck="false" placeholder="-- paste your Luau / Lua source here or import a code. if you see the imported code missing, that the anti crash function"></textarea>
   <div class="row">
-    <button class="btn" id="btnImport">📂 Import .lua</button>
+    <button class="btn" id="btnImport">Upload</button>
     <input type="file" id="fileInput" accept=".lua,.luau,.txt,text/plain" class="hidden">
     <button class="btn" id="btnClear">Clear</button>
   </div>
@@ -36,20 +36,20 @@
 <div class="card">
   <h2>Options</h2>
   <div class="row" style="margin-top:2px">
-    <label class="opt"><input type="checkbox" id="minify" checked> minify source first (comments, whitespace, numbers, call parens, local names &rarr; a,b,c&hellip;)</label>
+    <label class="opt"><input type="checkbox" id="minify" checked> minify source first (comments, whitespace, numbers, call parens, rename variables&rarr; &hellip;)</label>
     <span style="flex:1"></span>
-    <button class="btn primary" id="btnCompress">🗜️ Minify + compress</button>
+    <button class="btn primary" id="btnCompress">Start Compress</button>
   </div>
   <div class="errorbox" id="errBox"></div>
 </div>
 
 <div class="card" id="outCard" style="display:none">
-  <h2>Output — one-line loader <span class="meta" id="outCount"></span></h2>
+  <h2>Output<span class="meta" id="outCount"></span></h2>
   <div class="stats" id="stats"></div>
   <textarea id="output" readonly spellcheck="false"></textarea>
   <div class="row">
-    <button class="btn primary" id="btnCopy">📋 Copy</button>
-    <button class="btn" id="btnDownload">⬇ Download .lua</button>
+    <button class="btn primary" id="btnCopy">Copy</button>
+    <button class="btn" id="btnDownload">Download</button>
     <span class="okline" id="okline"></span>
   </div>
 </div>

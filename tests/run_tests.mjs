@@ -34,6 +34,13 @@ function roundTrip(s, opts, name) {
   const r = Z.compressToLoader(s, opts);
   const back = Z.decompressLoader(r.loader);
   if (back.src !== r.workText) { ok(false, name + " (decompressLoader mismatch vs workText)"); return r; }
+  if (r.entropy === 3) {
+    /* raw mode: 4-char marker + the (minified) source as-is, no container */
+    if (r.loader.indexOf("--Z\n") !== 0) { ok(false, name + " (raw marker)"); return r; }
+    if (r.loader.slice(4) !== r.workText) { ok(false, name + " (raw body != workText)"); return r; }
+    ok(true, name + " (raw)");
+    return r;
+  }
   const lines = r.loader.split("\n");
   if (lines.length !== 3 || lines[1].length === 0) { ok(false, name + " (not single-line)"); return r; }
   if (!lines[0].startsWith("--minified by ZipString")) { ok(false, name + " (header comment)"); return r; }
@@ -292,7 +299,7 @@ console.log("== Names ==");
   const r1 = Z.compressToLoader(Z.SAMPLE.repeat(3), { seed: 4242, entropy: "huffman" });
   const r2 = Z.compressToLoader(Z.SAMPLE.repeat(3), { seed: 4242, entropy: "huffman" });
   ok(r1.loader === r2.loader, "same seed -> identical loader");
-  const r3 = Z.compressToLoader("print(1) -- x", { seed: 999 });
+  const r3 = Z.compressToLoader("print(1) -- x", { seed: 999, entropy: "huffman" }); /* container: raw would ship no engine at all */
   ok(r1.loader !== r3.loader, "different seed -> different loader (alphabet)");
   ok(/local e=\{\}/.test(r1.loader) && /local e=\{\}/.test(r3.loader), "engine locals start at 'e' in every seed");
   ok(/local g,h=\{\},0/.test(r1.loader), "sequential names g,h follow e");
@@ -442,7 +449,7 @@ if (luas.length) {
   // error paths
   {
     const lua = luas[0];
-    const r = Z.compressToLoader("this is ! not valid lua ]=", { seed: 3 });
+    const r = Z.compressToLoader("this is ! not valid lua ]=", { seed: 3, entropy: "huffman" });
     const f = path.join(TMP, "err_compile.lua");
     writeFileSync(f, r.loader, "utf8");
     let threw = false, msg = "";
@@ -456,7 +463,7 @@ if (luas.length) {
     try { execFileSync(lua, [f2], { stdio: "pipe" }); } catch (e) { threw2 = true; msg2 = (e.stderr || "").toString(); }
     ok(threw2 && /boom from payload/.test(msg2), lua + " runtime error propagates");
 
-    const r3 = Z.compressToLoader("return 1 -- " + rnd(3000, ABC), { seed: 5, minify: false });
+    const r3 = Z.compressToLoader("return 1 -- " + rnd(3000, ABC), { seed: 5, minify: false, entropy: "stored" });
     const pStart = r3.loader.indexOf("[");
     const payloadRegion = r3.loader.slice(pStart);
     const flipAt = payloadRegion.search(/[0-9a-zA-Z]/) + pStart;
@@ -475,7 +482,9 @@ if (luas.length) {
     execFileSync("luac5.1", ["-v"], { stdio: "pipe" });
     let synOk = 0;
     for (let seed = 0; seed < 25; seed++) {
-      const r = Z.compressToLoader(Z.SAMPLE + "\n-- seed probe " + seed, { seed });
+      /* container loader (forced): a raw loader would expose the sample's Luau-only
+         syntax to luac5.1, and raw carries no seed-dependent alphabet anyway */
+      const r = Z.compressToLoader(Z.SAMPLE + "\n-- seed probe " + seed, { seed, entropy: "huffman" });
       const f = path.join(TMP, "syn_" + seed + ".lua");
       writeFileSync(f, r.loader, "utf8");
       execFileSync("luac5.1", ["-p", f], { stdio: "pipe" });
@@ -738,6 +747,36 @@ if (luas.length) {
     rmSync(LT2, { recursive: true, force: true });
   }
   rmSync(TMP, { recursive: true, force: true });
+}
+
+/* ============ raw mode: tiny files actually compress ============ */
+{
+  console.log("\n== Raw mode (tiny files) ==");
+  const r = Z.compressToLoader('print("Hello, World!")', { seed: 5 });
+  ok(r.entropy === 3, "hello world ships raw (tag " + r.entropy + ")");
+  ok(r.loaderChars < 40, "hello world loader is " + r.loaderChars + " chars (an engine would cost ~1.6K)");
+  ok(r.loader.slice(4) === r.workText, "raw loader = 4-char marker + minified source");
+  ok(Z.decompressLoader(r.loader).src === r.workText, "raw loader round-trips through the decompressor");
+  ok(Z.decompressLoader(r.loader).tag === 3, "decompressor recognizes the raw tag");
+  const rS = Z.compressToLoader(Z.SAMPLE, { seed: 5 });
+  ok(rS.entropy === 3 && rS.loaderChars < rS.origChars, "2 KB sample ships raw and compresses (" +
+    Math.round((1 - rS.loaderChars / rS.origChars) * 100) + "% smaller)");
+  const rX3 = Z.compressToLoader(Z.SAMPLE.repeat(3), { seed: 5 });
+  ok(rX3.loaderChars < rX3.origChars, "5.9 KB sample compresses (" +
+    Math.round((1 - rX3.loaderChars / rX3.origChars) * 100) + "% smaller, tag " + rX3.entropy + ")");
+  const rBig = Z.compressToLoader(Z.SAMPLE.repeat(34), { seed: 5 });
+  ok(rBig.entropy !== 3 && rBig.loaderChars < rBig.origChars, "66 KB sample switches to a container (" +
+    Math.round((1 - rBig.loaderChars / rBig.origChars) * 100) + "% smaller, tag " + rBig.entropy + ")");
+  const rDump = Z.compressToLoader(Z.SAMPLE, { seed: 5, mode: "dump" });
+  ok(rDump.entropy !== 3, "dump mode never ships raw (byte-exact harness)");
+  const rForced = Z.compressToLoader('print("Hello, World!")', { seed: 5, entropy: "rc" });
+  ok(rForced.entropy === 2 || rForced.entropy === 0, "forced entropy stays container-only (tag " + rForced.entropy + ")");
+  ok(Z.decompressLoader(rForced.loader).src === rForced.workText, "forced rc on hello still round-trips");
+  const rSh = Z.compressToLoader("#!/usr/bin/env lua\nprint(1)", { seed: 5 });
+  ok(rSh.entropy !== 3, "shebang sources never ship raw (marker would take line 1)");
+  ok(Z.decompressLoader(rSh.loader).src === rSh.workText, "shebang source round-trips via container");
+  const rRand = Z.compressToLoader(rnd(3000, ABC), { seed: 5, minify: false });
+  ok(rRand.entropy === 3 || rRand.loaderChars <= rRand.origChars + 8, "incompressible random ships raw (no +31% ASCII85 penalty)");
 }
 
 /* ============ specialized engines + small files ============ */

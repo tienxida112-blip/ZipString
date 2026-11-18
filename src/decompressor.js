@@ -249,6 +249,12 @@ function decodeContainer(u, alpha, legacy) {
 }
 
 function decompressLoader(loaderText) {
+  if (loaderText.indexOf("--Z\n") === 0) {
+    /* raw loader: the payload ships as the plain (minified) source — no container */
+    const src = loaderText.slice(4);
+    const bytes = new TextEncoder().encode(src);
+    return { src: src, bytes: bytes, len: bytes.length, tag: 3, legacy: false };
+  }
   if (/\[0x[0-9a-fA-F]+\]=\(/.test(loaderText)) {
     throw new Error("this looks like an old multi-piece loader (piece table) — ZipString only decodes ZipString output");
   }

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ZipString · Decompress / inspect</title>
-<meta name="description" content="Paste a ZipString loader and see exactly what it will run before you run it. 100% client-side.">
+<title>ZipString · Decompressor</title>
+<meta name="description" content="Decompress compressor output">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗜️</text></svg>">
 <link rel="stylesheet" href="../src/style.css">
 </head>
@@ -17,18 +17,22 @@
 </header>
 
 <nav class="tabs">
-  <a href="../compressor/">🗜️ Compress</a>
-  <a class="active" href="./">🔍 Decompress / inspect</a>
+  <a class="active" href="./">Compressor</a>
+  <a href="../decompressor/">Decompressor</a>
 </nav>
 
 <section>
 
 <div class="card">
   <h2>Paste a ZipString loader <span class="meta">see exactly what it will run before you run it</span></h2>
-  <textarea id="dIn" spellcheck="false" placeholder="--minified by ZipString ...&#10;return(function()...&#10;-- paste the whole loader here"></textarea>
+  <textarea id="dIn" spellcheck="false" placeholder="--minified by ZipString ...&#10;return(function()...&#10;-- paste or upload your compressed code here. if you see the imported code missing, that the anti crash function"></textarea>
   <div class="row">
-    <button class="btn primary" id="btnDecompress">🔍 Decompress</button>
+    <button class="btn primary" id="btnDecompress">Decompress</button>
+    <button class="btn" id="btnDImport">Upload</button>
+    <input type="file" id="dFileInput" accept=".lua,.luau,.txt,text/plain" class="hidden">
+    <button class="btn" id="btnDClear">Clear</button>
   </div>
+  <div class="count" id="dInCount">0 chars · 0 bytes (UTF-8)</div>
   <div class="errorbox" id="dErrBox"></div>
 </div>
 
@@ -37,6 +41,7 @@
   <textarea id="dOut" readonly spellcheck="false"></textarea>
   <div class="row">
     <button class="btn primary" id="dCopy">📋 Copy</button>
+    <button class="btn" id="dDownload">⬇ Download .lua</button>
   </div>
 </div>
 
